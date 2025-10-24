@@ -1,125 +1,54 @@
 "use server";
 
 import { jobs, salaries } from "@/data";
-import { Salary } from "@/types/salary";
-import Fuse from "fuse.js";
+import { Job } from "@/types/job";
+
+import { fuzzySearch, getAvailableSalaries } from "@/lib/utils";
+
 import OpenAI from "openai";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
-// Helper function to extract only available salary grades
-function getAvailableSalaries(salary: Salary) {
-  const maxNumGrades = 14;
-  const grades: string[] = [];
-
-  for (let i = 1; i <= maxNumGrades; i++) {
-    const key = `Salary grade ${i}` as keyof Salary;
-    const rawValue = salary[key];
-
-    // Remove whitespace
-    const value = rawValue?.trim();
-    if (value && value !== "") grades.push(`${key}: ${value}`);
-  }
-
-  return grades;
-}
-
-// Helper function to perform fuzzy search
-function fuzzySearch(userMsg: string) {
-  const fuse = new Fuse(jobs, {
-    keys: ["jurisdiction", "title", "description"],
-    threshold: 0.4,
-    ignoreLocation: true,
-    isCaseSensitive: false,
-  });
-  const results = fuse.search(userMsg);
-  // console.log(results);
-  return results;
-}
-
-// HELPER
-function extractJurisdiction(userMsg: string): string | null {
-  const msgLower = userMsg.toLowerCase();
-  const distinctJurisdictions = [...new Set(jobs.map((j) => j.jurisdiction))];
-
-  const found = distinctJurisdictions.find((jurisdiction: string) => {
-    // Check if userMsg contains the jurisdiction with OR without spaces
-    return (
-      msgLower.includes(jurisdiction.toLowerCase()) ||
-      msgLower.replace(/\s+/g, "").includes(jurisdiction)
-    );
-  });
-  return found || null;
-}
-
 export async function getReply(userMsg: string): Promise<string | null> {
-  // 1 - If job code exists, extract via regex (4-5 digit long number)
-  const codeMatch = userMsg.match(/\b\d{4,5}\b/);
-  const jobCode = codeMatch ? codeMatch[0] : null;
+  // 1 - EXTRACT JOB CODES from userMsg via regex (if they exist)
+  const codeMatches = userMsg.match(/\b\d{4,5}\b/g); // (4-5 digit long number)
 
-  // 2 - Extract any mentions of jurisdictions from userMsg
-  const extractedJurisdiction = extractJurisdiction(userMsg);
+  // 2 - SEARCH FOR JOBS. Prioritize exact code match, else use fuzzy search
+  let jobMatches: Job[] = [];
+  let lookupCodes: string[] | null;
 
-  // 3 - Search for jobs. Prioritize exact code match, else use fuzzy search
-  let allMatches;
-
-  // Code in userMsg exists
-  if (jobCode) {
-    // Try to find exact match via code first
-    const exactMatches = jobs.filter((job) => job.code === jobCode);
-
-    if (exactMatches.length > 0) allMatches = exactMatches;
-    else {
-      // If no exact code matches, fallback to fuzzy search
-      allMatches = fuzzySearch(userMsg)
-        .slice(0, 8)
-        .map((r) => r.item);
-    }
+  // CODES present in userMsg
+  if (codeMatches) {
+    jobMatches = jobs.filter((job) => codeMatches.includes(job.code));
+    lookupCodes = Array.from(new Set(jobMatches.map((m) => m.code)));
   }
-  // No code in userMsg, use fuzzy search
+  // NO CODES present in userMsg
   else {
-    allMatches = fuzzySearch(userMsg)
-      .slice(0, 8)
-      .map((r) => r.item);
+    jobMatches = fuzzySearch(userMsg).map((r) => r.item);
+    lookupCodes = Array.from(new Set(jobMatches.map((m) => m.code)));
   }
 
-  // 4 - Search for salaries via code
-  let lookupCode = null;
-  console.log(allMatches[0].code);
+  // 3 - SEARCH FOR SALARIES
+  const salaryMatches = salaries.filter((s) =>
+    lookupCodes.includes(s["Job Code"])
+  );
+  // Eliminate missing salary grades
+  const availableSalaries = salaryMatches.map((s) => ({
+    code: s["Job Code"],
+    salaries: getAvailableSalaries(s),
+  }));
 
-  // A code exists in the userMsg
-  if (jobCode) lookupCode = jobCode;
-  // No code, only 1 match
-  else if (allMatches.length === 1) lookupCode = allMatches[0].code;
-  // A jurisdiction was extracted from userMsg
-  else if (extractedJurisdiction) {
-    // Match by jurisdiction from userMsg
-    const matched = allMatches.find(
-      (match) =>
-        match.jurisdiction.toLowerCase() === extractedJurisdiction.toLowerCase()
-    );
-
-    lookupCode = matched ? matched.code : null;
-    console.log(allMatches.length);
-
-    console.log(lookupCode);
-  }
-
-  const salary = salaries.find((s) => s["Job Code"] === lookupCode);
-  const availableSalaries = salary ? getAvailableSalaries(salary) : [];
-
-  console.log(availableSalaries);
-
+  // 4 - PREPARE DATA for LLM
   const context = `
     User asked: "${userMsg}"
 
-    Job code: ${jobCode ?? "none found"}
+    Job codes: ${codeMatches ?? "none found"}
 
     ${
-      allMatches.length > 0
-        ? allMatches
+      jobMatches.length > 0
+        ? jobMatches
             .map(
               (match, index) => `
     Match ${index + 1}:
@@ -134,12 +63,19 @@ export async function getReply(userMsg: string): Promise<string | null> {
     }
     ${
       availableSalaries.length > 0
-        ? `Available salaries:\n${availableSalaries.join("\n")}`
+        ? `Available salaries:\n${availableSalaries
+            .map(
+              (s) => `
+              Codes: ${s.code}
+              Salaries: ${s.salaries.join(", ")}
+              `
+            )
+            .join("\n")}`
         : "No salary information is available"
     }
     `;
 
-  // 5 - Setup OpenAi and get response
+  // 5 - SETUP OPENAI and get response
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
@@ -154,10 +90,6 @@ export async function getReply(userMsg: string): Promise<string | null> {
     ],
     temperature: 0,
   });
-
-  //   // TESTING
-  //   const answer = `TEST. Your context was: ${context}`;
-  //   await new Promise((resolve) => setTimeout(resolve, 1000));
 
   const answer = completion.choices[0]?.message?.content;
   return answer || "Sorry, I could not find anything";
