@@ -1,15 +1,41 @@
 "use client";
 
+import { useState } from "react";
+import { getReply } from "../actions/getReply";
+
 function Page() {
-  const messages = [
-    { id: "1", text: "This is ai message 1", from: "assistant" },
-    {
-      id: "2",
-      text: "This is ai message 2 This is ai message 2 This is ai message 2",
-      from: "assistant",
-    },
-    { id: "3", text: "This is human message 1", from: "user" },
-  ];
+  const [messages, setMessages] = useState<
+    { id: string; text: string; from: "user" | "assistant" }[]
+  >([]);
+
+  const [input, setInput] = useState("");
+
+  async function handleSubmit() {
+    const userMsg = input;
+    if (!userMsg) return;
+
+    // Add user's message
+    setMessages((prev) => [
+      ...prev,
+      { id: Date.now().toString(), text: userMsg, from: "user" },
+    ]);
+
+    // Call server action
+    const reply = await getReply(userMsg);
+
+    if (!reply) return;
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: (Date.now() + 1).toString(),
+        text: reply,
+        from: "assistant",
+      },
+    ]);
+
+    setInput("");
+  }
 
   return (
     <div className="w-full mx-auto p-4">
@@ -27,10 +53,18 @@ function Page() {
           </div>
         ))}
       </div>
-      <form className=" mt-4 flex justify-center">
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          await handleSubmit();
+        }}
+        className="mt-4 flex justify-center"
+      >
         <div className="relative w-[70%]">
           <input
             type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
             placeholder="Start chatting"
             className="w-full border border-gray-300 rounded-md px-3 py-2 pr-20"
           />
