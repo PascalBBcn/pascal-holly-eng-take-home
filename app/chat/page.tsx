@@ -2,11 +2,19 @@
 
 import { useState } from "react";
 import { getReply } from "../actions/getReply";
+import MessageList from "../_components/MessageList";
+import MessageForm from "../_components/MessageForm";
+
+export type Message = {
+  id: string;
+  text: string;
+  from: "user" | "assistant";
+};
 
 function Page() {
-  const [messages, setMessages] = useState<
-    { id: string; text: string; from: "user" | "assistant" }[]
-  >([]);
+  const [isPending, setIsPending] = useState(false);
+
+  const [messages, setMessages] = useState<Message[]>([]);
 
   const [input, setInput] = useState("");
 
@@ -19,6 +27,7 @@ function Page() {
       ...prev,
       { id: Date.now().toString(), text: userMsg, from: "user" },
     ]);
+    setIsPending(true);
 
     // Call server action
     const reply = await getReply(userMsg);
@@ -35,44 +44,18 @@ function Page() {
     ]);
 
     setInput("");
+    setIsPending(false);
   }
 
   return (
     <div className="w-full mx-auto p-4">
-      <div className="min-h-[400px] border border-gray-300 rounded-md p-4 space-y-2">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`max-w-[40%] px-4 py-2 rounded-lg text-sm break-words ${
-              msg.from === "user"
-                ? "bg-blue-200 text-left ml-auto"
-                : "bg-gray-200 text-left"
-            }`}
-          >
-            {msg.text}
-          </div>
-        ))}
-      </div>
-      <form
-        onSubmit={async (e) => {
-          e.preventDefault();
-          await handleSubmit();
-        }}
-        className="mt-4 flex justify-center"
-      >
-        <div className="relative w-[70%]">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Start chatting"
-            className="w-full border border-gray-300 rounded-md px-3 py-2 pr-20"
-          />
-          <button className="absolute top-1/2 right-0 -translate-y-1/2 bg-red-600  text-white px-4 py-2 rounded-sm">
-            Send
-          </button>
-        </div>
-      </form>
+      <MessageList messages={messages} />
+      <MessageForm
+        input={input}
+        setInput={setInput}
+        handleSubmit={handleSubmit}
+        isPending={isPending}
+      />
     </div>
   );
 }
